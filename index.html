@@ -1735,8 +1735,11 @@ function convertEnquiryToStudent(id) {
 }
 
 function deleteEnquiry(id) {
+  const q = (DB.enquiries||[]).find(x => x.id === id);
+  const qName = q ? q.name : id;
   confirm_('🗑️','Delete Query','Delete this query permanently?', () => {
     DB.enquiries = (DB.enquiries||[]).filter(q => q.id !== id);
+    addLog('enquiry', `Deleted query for ${qName}`);
     scheduleFirebasePush();
     closeModal('modalEnquiryDetail');
     renderEnquiryList();
@@ -1979,9 +1982,47 @@ function daysInMonth(year, month) { return new Date(year, month, 0).getDate(); }
 
 function addLog(action, detail) {
   if (!currentUser) return;
-  DB.changelog.unshift({ user: currentUser.id, role: currentUser.role||'staff', action, detail, time: new Date().toISOString() });
+  // Unique id ensures concurrent log entries from different devices don't
+  // collide. Time + random suffix is good enough for our scale.
+  const id = 'lg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  DB.changelog.unshift({
+    id,
+    user: currentUser.id,
+    role: currentUser.role || 'staff',
+    action,
+    detail,
+    time: new Date().toISOString()
+  });
   if (DB.changelog.length > 500) DB.changelog.length = 500;
   scheduleFirebasePush(); // push log to Firebase
+}
+
+// Merge two log arrays (changelog or msgLogs) — union by id, then by
+// (user+time+action) fingerprint for legacy entries that pre-date id.
+// Returns newest-first, capped to `max` entries.
+function mergeLogArrays(localArr, remoteArr, max) {
+  const seen = new Map();
+  const fingerprint = e => e && (e.id || ((e.user||'') + '|' + (e.time||e.at||'') + '|' + (e.action||e.type||'')));
+  const ingest = arr => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach(e => {
+      if (!e) return;
+      const k = fingerprint(e);
+      if (!k) return;
+      if (!seen.has(k)) seen.set(k, e);
+    });
+  };
+  // Order matters only for ties: prefer local (newer in-memory) over remote.
+  ingest(localArr);
+  ingest(remoteArr);
+  const merged = Array.from(seen.values());
+  // Sort newest-first by time/at
+  merged.sort((a, b) => {
+    const ta = new Date(a.time || a.at || 0).getTime();
+    const tb = new Date(b.time || b.at || 0).getTime();
+    return tb - ta;
+  });
+  return max ? merged.slice(0, max) : merged;
 }
 
 // ----------------------------------------------------------------
@@ -2353,7 +2394,14 @@ async function startPull() {
         const remote = payload.path === '/' ? payload.data : null;
         if (!remote || !currentUser || isSyncing || isModalOpen()) return;
         notifyFirebaseUpdate(remote, false);
+        // Preserve any local log entries we made but haven't pushed yet.
+        // Without this, an inbound SSE update would overwrite our just-added
+        // changelog/msgLogs entries before they can be pushed to Firebase.
+        const pendingChangelog = Array.isArray(DB.changelog) ? DB.changelog : [];
+        const pendingMsgLogs   = Array.isArray(DB.msgLogs)   ? DB.msgLogs   : [];
         DB = ensureArrays(remote);
+        DB.changelog = mergeLogArrays(pendingChangelog, DB.changelog, 500);
+        DB.msgLogs   = mergeLogArrays(pendingMsgLogs,   DB.msgLogs,   200);
         if (currentUser) { const r = DB.users.find(u => u && u.id === currentUser.id); if (r) currentUser = r; }
         refreshCurrentPage();
         const st = document.getElementById('fbStatus');
@@ -2384,7 +2432,13 @@ function startPolling(url) {
       const newStr = JSON.stringify(remote);
       if (oldStr === newStr) return; // no change
       notifyFirebaseUpdate(remote, false);
+      // Same protection as the SSE handler — preserve any local log entries
+      // we have added but not yet pushed.
+      const pendingChangelog = Array.isArray(DB.changelog) ? DB.changelog : [];
+      const pendingMsgLogs   = Array.isArray(DB.msgLogs)   ? DB.msgLogs   : [];
       DB = ensureArrays(remote);
+      DB.changelog = mergeLogArrays(pendingChangelog, DB.changelog, 500);
+      DB.msgLogs   = mergeLogArrays(pendingMsgLogs,   DB.msgLogs,   200);
       if (currentUser) { const r = DB.users.find(u => u && u.id === currentUser.id); if (r) currentUser = r; }
       lastKnownDB = newStr;
       refreshCurrentPage();
@@ -2424,10 +2478,30 @@ function doPush() {
   }
   isSyncing = true;
   pendingPush = false;
-  const snapshot = JSON.parse(JSON.stringify(DB));
-  if (snapshot.settings) delete snapshot.settings.firebaseApiKey;
-  notifyFirebaseUpdate(snapshot, true);
-  fbPut('/sacdb', snapshot)
+
+  // Before pushing, fetch the latest changelog + msgLogs from Firebase and
+  // merge them into the local DB. This protects log entries written by other
+  // devices in the brief window since our last pull — without the merge, our
+  // upcoming PUT to /sacdb would overwrite them.
+  // We deliberately scope this to append-only log structures only; everything
+  // else uses last-write-wins which is the original behaviour.
+  Promise.all([
+    fbGet('/sacdb/changelog').catch(() => null),
+    fbGet('/sacdb/msgLogs').catch(()  => null)
+  ]).then(([remoteChangelog, remoteMsgLogs]) => {
+    const rcl = Array.isArray(remoteChangelog)
+      ? remoteChangelog
+      : (remoteChangelog && typeof remoteChangelog === 'object' ? Object.values(remoteChangelog) : []);
+    const rml = Array.isArray(remoteMsgLogs)
+      ? remoteMsgLogs
+      : (remoteMsgLogs && typeof remoteMsgLogs === 'object' ? Object.values(remoteMsgLogs) : []);
+    DB.changelog = mergeLogArrays(DB.changelog || [], rcl, 500);
+    DB.msgLogs   = mergeLogArrays(DB.msgLogs   || [], rml, 200);
+
+    const snapshot = JSON.parse(JSON.stringify(DB));
+    if (snapshot.settings) delete snapshot.settings.firebaseApiKey;
+    notifyFirebaseUpdate(snapshot, true);
+    return fbPut('/sacdb', snapshot)
     .then(() => {
       DB.settings.lastPush = new Date().toISOString();
       DB.settings.lastPushBy = currentUser ? currentUser.id : '';
@@ -2447,6 +2521,17 @@ function doPush() {
     .finally(() => {
       setTimeout(() => { isSyncing = false; }, 1500);
     });
+  }).catch(err => {
+    // If the merge step itself fails (e.g. transient network blip while
+    // fetching changelog/msgLogs), don't get stuck — release the lock and
+    // queue a retry so the user's data still reaches Firebase.
+    pendingPush = true;
+    isSyncing = false;
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = setTimeout(doPush, 3000);
+    const st = document.getElementById('fbStatus');
+    if (st) st.textContent = '🟠 Sync prep failed — retrying...';
+  });
 }
 
 function pushToFirebase() {
@@ -2529,6 +2614,33 @@ function mergeStudents(localArr, remoteArr) {
   // Overlay remote students — Firebase wins for same ID
   (remoteArr || []).forEach(s => { map[s.id] = s; });
   return Object.values(map);
+}
+
+// Merge two append-only log arrays (changelog or msgLogs).
+// Preserves every unique entry from both sides, dedupes by `id`, and sorts
+// newest-first by `time` (changelog) or `at` (msgLog).
+// This is what prevents log entries from being lost when two devices push or
+// pull near-simultaneously.
+function mergeLogArrays(localArr, remoteArr, cap) {
+  const seen = {};
+  const out = [];
+  const collect = item => {
+    if (!item) return;
+    // Fallback id for legacy entries that pre-date the id field
+    const id = item.id || ((item.user||'') + '|' + (item.time||item.at||'') + '|' + (item.action||'') + '|' + (item.detail||item.msg||''));
+    if (seen[id]) return;
+    seen[id] = true;
+    out.push(item);
+  };
+  (localArr  || []).forEach(collect);
+  (remoteArr || []).forEach(collect);
+  out.sort((a, b) => {
+    const ta = a.time || a.at || '';
+    const tb = b.time || b.at || '';
+    return tb.localeCompare(ta); // newest first
+  });
+  if (cap && out.length > cap) out.length = cap;
+  return out;
 }
 
 function smartMerge(local, remote) {
@@ -4351,7 +4463,7 @@ function openSendAllMsgModal(fk) {
           const sentBy = currentUser.name || currentUser.id;
           const sentAt = new Date().toISOString();
           if (!DB.msgLogs) DB.msgLogs = [];
-          DB.msgLogs.unshift({ type: 'whatsapp', to: s.name, contact: s.contact, month: monthLabel, by: sentBy, at: sentAt, msg });
+          DB.msgLogs.unshift({ id: 'ml_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), type: 'whatsapp', to: s.name, contact: s.contact, month: monthLabel, by: sentBy, at: sentAt, msg });
           if (!DB.fees[fk]) DB.fees[fk] = {};
           if (!DB.fees[fk][s.id]) DB.fees[fk][s.id] = {};
           if (!DB.fees[fk][s.id].msgSent) DB.fees[fk][s.id].msgSent = [];
@@ -4438,7 +4550,7 @@ function sendFeeMsg(type) {
   const monthLabel = MONTHS[fm-1] + ' ' + fy;
   const sentBy = currentUser.name || currentUser.id;
   const sentAt = new Date().toISOString();
-  const logEntry = { type, to: s.name, contact: s.contact, month: monthLabel, by: sentBy, at: sentAt, msg: msgText };
+  const logEntry = { id: 'ml_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), type, to: s.name, contact: s.contact, month: monthLabel, by: sentBy, at: sentAt, msg: msgText };
   if (!DB.msgLogs) DB.msgLogs = [];
   DB.msgLogs.unshift(logEntry);
   if (DB.msgLogs.length > 200) DB.msgLogs.length = 200;
@@ -5809,6 +5921,7 @@ function openNoteModal() {
 function saveNote() {
   DB.notes = document.getElementById('noteText').value;
   saveLocal();
+  addLog('notes', 'Notes updated');
   scheduleFirebasePush();
   closeModal('modalNote');
   showToast('Note saved ✓','success');
