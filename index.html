@@ -803,6 +803,7 @@ body { font-family: 'Segoe UI', 'Noto Sans', Roboto, 'Arial Unicode MS', Arial, 
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div class="section-title" style="margin-bottom:0;">👤 Profile</div>
         <div style="display:flex;gap:6px;">
+          <button class="btn btn-outline btn-sm" onclick="openSettingsModal()" title="Settings">⚙️ Settings</button>
           <button class="btn btn-danger btn-sm" onclick="doLogout()">Logout</button>
         </div>
       </div>
@@ -867,49 +868,17 @@ body { font-family: 'Segoe UI', 'Noto Sans', Roboto, 'Arial Unicode MS', Arial, 
         </div>
       </div>
 
-      <!-- Firebase -->
-      <div class="card">
-        <div class="section-title" style="font-size:12px;">🔥 Firebase Sync</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;background:var(--royal2);border-radius:8px;padding:9px 12px;">
-          <span id="fbStatus" style="font-size:12px;color:var(--gray);flex:1;">⚪ Not connected</span>
-        </div>
 
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="manualPull()">⬇️ Pull</button>
-          <button class="btn btn-outline btn-sm" style="flex:1;" id="pushBtn" onclick="pushToFirebase()">⬆️ Push</button>
-        </div>
-        <div style="font-size:11px;color:var(--gray);margin-top:7px;">
-          Auto-sync: every 2s &nbsp;|&nbsp; Last push: <span id="lastPushInfo">Never</span>
-        </div>
-        <div id="syncIndicator" style="font-size:10px;color:var(--graydk);margin-top:3px;"></div>
-      </div>
+      <!-- Firebase status elements (hidden, referenced by JS) -->
+      <span id="fbStatus" style="display:none;"></span>
+      <span id="lastPushInfo" style="display:none;"></span>
+      <div id="syncIndicator" style="display:none;"></div>
 
-      <!-- Data Import / Export — Admin only -->
-      <div class="card admin-only" id="dataCard">
-        <div class="section-title" style="font-size:12px;">💾 Data Backup &amp; Restore</div>
-        <div style="font-size:11px;color:var(--gray);margin-bottom:10px;">Export all academy data to a JSON file, or restore from a previously exported file.</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" style="flex:1;" onclick="exportAllData()">⬇️ Export Data</button>
-          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="document.getElementById('importDataFile').click()">⬆️ Import Data</button>
-        </div>
-        <input type="file" id="importDataFile" accept=".json" style="display:none" onchange="importAllData(event)">
-        <div id="importDataStatus" style="font-size:11px;margin-top:8px;display:none;"></div>
-      </div>
+      <!-- importDataFile kept hidden for legacy JS compat -->
+      <input type="file" id="importDataFile" accept=".json" style="display:none" onchange="importAllData(event)">
 
-      <!-- Daily Snapshots — Admin only -->
-      <div class="card admin-only" id="snapshotCard">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-          <div class="section-title" style="margin-bottom:0;font-size:12px;">📸 Daily Snapshots</div>
-          <button class="btn btn-primary btn-xs" onclick="takeSnapshotNow()">📸 Snap Now</button>
-        </div>
-        <div style="font-size:11px;color:var(--gray);margin-bottom:10px;line-height:1.6;">
-          Auto-snapshot taken once daily (on first login of the day). Last 30 days kept.
-          Tap <b>↩ Restore</b> to recover all data from any snapshot.
-        </div>
-        <div id="snapshotListWrap" style="max-height:300px;overflow-y:auto;">
-          <div class="empty-state" style="padding:14px;">No snapshots yet.</div>
-        </div>
-      </div>
+      <!-- snapshotListWrap kept hidden for legacy JS compat -->
+      <div id="snapshotListWrap" style="display:none;"></div>
 
       <!-- Batch Management — Admin only -->
       <div class="card admin-only" id="batchCard">
@@ -1310,6 +1279,67 @@ body { font-family: 'Segoe UI', 'Noto Sans', Roboto, 'Arial Unicode MS', Arial, 
     </div>
   </div>
 </div>
+<!-- SETTINGS MODAL -->
+<div class="modal-overlay" id="modalSettings">
+  <div class="modal">
+    <div class="modal-title">
+      <span>⚙️ Settings</span>
+      <button class="modal-close" onclick="closeModal('modalSettings')">×</button>
+    </div>
+
+    <!-- Firebase Sync — ALL users -->
+    <div style="margin-bottom:16px;">
+      <div class="section-title" style="font-size:13px;margin-bottom:8px;">🔥 Firebase Sync</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;background:var(--royal2);border-radius:8px;padding:9px 12px;">
+        <span id="fbStatusModal" style="font-size:12px;color:var(--gray);flex:1;">⚪ Not connected</span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="settingsPull()">⬇️ Pull</button>
+        <button class="btn btn-outline btn-sm" style="flex:1;" onclick="settingsPush()">⬆️ Push</button>
+      </div>
+      <div style="font-size:11px;color:var(--gray);margin-top:7px;">
+        Auto-sync: every 2s &nbsp;|&nbsp; Last push: <span id="lastPushInfoModal">Never</span>
+      </div>
+    </div>
+
+    <!-- Admin-only section -->
+    <div id="settingsAdminOnly" style="display:none;">
+      <div style="height:1px;background:var(--border);margin:4px 0 16px;"></div>
+
+      <!-- Data Backup & Restore -->
+      <div style="margin-bottom:16px;">
+        <div class="section-title" style="font-size:13px;margin-bottom:6px;">💾 Data Backup &amp; Restore</div>
+        <div style="font-size:11px;color:var(--gray);margin-bottom:10px;line-height:1.6;">
+          Export all academy data to a JSON file, or restore from a previously exported file.
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" style="flex:1;" onclick="exportAllData()">⬇️ Export Data</button>
+          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="document.getElementById('importDataFileSettings').click()">⬆️ Import Data</button>
+        </div>
+        <input type="file" id="importDataFileSettings" accept=".json" style="display:none" onchange="importAllData(event)">
+        <div id="importDataStatusSettings" style="font-size:11px;margin-top:8px;display:none;color:#4ade80;"></div>
+      </div>
+
+      <div style="height:1px;background:var(--border);margin:4px 0 16px;"></div>
+
+      <!-- Daily Snapshots -->
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div class="section-title" style="margin-bottom:0;font-size:13px;">📸 Daily Snapshots</div>
+          <button class="btn btn-primary btn-xs" onclick="takeSnapshotFromSettings()">📸 Snap Now</button>
+        </div>
+        <div style="font-size:11px;color:var(--gray);margin-bottom:10px;line-height:1.6;">
+          Auto-snapshot taken once daily (on first login of the day). Last 30 days kept.
+          Tap <b>↩ Restore</b> to recover all data from any snapshot.
+        </div>
+        <div id="snapshotListWrapSettings" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">
+          <div class="empty-state" style="padding:14px;">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- CONFIRM DIALOG -->
 <div class="confirm-overlay" id="confirmDlg">
   <div class="confirm-box">
@@ -6397,6 +6427,133 @@ setInterval(() => {
     } catch(e) { /* session restore failed — user stays on login */ }
   });
 })();
+
+// ================================================================
+// SETTINGS MODAL
+// ================================================================
+function openSettingsModal() {
+  // Sync Firebase status text into modal
+  const srcStatus = document.getElementById('fbStatus');
+  const dstStatus = document.getElementById('fbStatusModal');
+  if (srcStatus && dstStatus) dstStatus.textContent = srcStatus.textContent;
+
+  const srcLP = document.getElementById('lastPushInfo');
+  const dstLP = document.getElementById('lastPushInfoModal');
+  if (srcLP && dstLP) dstLP.textContent = srcLP.textContent;
+
+  // Show/hide admin section
+  const adminOnly = document.getElementById('settingsAdminOnly');
+  if (adminOnly) adminOnly.style.display = isAdmin() ? '' : 'none';
+
+  // Load snapshots for admin
+  if (isAdmin()) renderSnapshotListSettings();
+
+  openModal('modalSettings');
+}
+
+async function renderSnapshotListSettings() {
+  const wrap = document.getElementById('snapshotListWrapSettings');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="empty-state" style="padding:14px;">🔄 Loading snapshots…</div>';
+
+  let list = [];
+  if (fbDb) {
+    try {
+      const remote = await fbGet('/snapshots');
+      if (remote && typeof remote === 'object') {
+        list = Object.keys(remote).map(key => {
+          const snap = remote[key];
+          return { key, time: snap._snapTime || new Date().toISOString(), label: snap._snapLabel || 'auto' };
+        }).sort((a, b) => b.key.localeCompare(a.key));
+        DB.snapshotIndex = list.map(s => ({ key: s.key, time: s.time, label: s.label }));
+      }
+    } catch(e) {
+      list = Array.isArray(DB.snapshotIndex) ? [...DB.snapshotIndex].sort((a,b) => b.key.localeCompare(a.key)) : [];
+    }
+  } else {
+    list = Array.isArray(DB.snapshotIndex) ? [...DB.snapshotIndex].sort((a,b) => b.key.localeCompare(a.key)) : [];
+  }
+
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty-state" style="padding:14px;">No snapshots yet. Tap 📸 Snap Now to create one.</div>';
+    return;
+  }
+
+  wrap.innerHTML = list.map(s => {
+    const d   = new Date(s.time);
+    const lbl = s.label === 'manual' ? '🖐 Manual' : '🕛 Auto';
+    const col = s.label === 'manual' ? 'var(--accent2)' : 'var(--gold)';
+    const ts  = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) +
+                ' ' + d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border);gap:8px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:700;color:var(--white);">📅 ${escHtml(s.key)}</div>
+        <div style="font-size:11px;color:var(--gray);margin-top:2px;">
+          <span style="color:${col};font-weight:600;">${lbl}</span> · ${escHtml(ts)}
+        </div>
+      </div>
+      <div style="display:flex;gap:5px;flex-shrink:0;">
+        <button onclick="restoreSnapshot('${escHtml(s.key)}')" class="btn btn-warning btn-xs">↩ Restore</button>
+        <button onclick="deleteSnapshotSettings('${escHtml(s.key)}')" class="btn btn-danger btn-xs">🗑️</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function deleteSnapshotSettings(key) {
+  confirm_('🗑️', 'Delete Snapshot', 'Delete snapshot ' + key + '? This cannot be undone.',
+    async () => {
+      if (!fbDb) { showToast('Firebase not connected', 'error'); return; }
+      try {
+        const _fbUser = window._fbAuth && window._fbAuth.currentUser;
+        const _token  = _fbUser ? await _fbUser.getIdToken() : '';
+        const _auth   = _token  ? '?auth=' + encodeURIComponent(_token) : '';
+        await fetch(fbBaseUrl() + '/snapshots/' + key + '.json' + _auth, { method: 'DELETE' });
+        DB.snapshotIndex = (DB.snapshotIndex || []).filter(s => s.key !== key);
+        scheduleFirebasePush();
+        renderSnapshotListSettings();
+        renderSnapshotList();
+        addLog('snapshot', 'Deleted snapshot ' + key);
+        showToast('Snapshot deleted ✓', 'success');
+      } catch(e) { showToast('Delete failed: ' + e.message, 'error'); }
+    });
+}
+
+async function takeSnapshotFromSettings() {
+  if (!fbDb) { showToast('Firebase not connected', 'error'); return; }
+  confirm_('📸', 'Take Snapshot', 'Save a snapshot of all current data?', async () => {
+    const key = await takeSnapshot('manual');
+    if (key) {
+      showToast('📸 Snapshot saved: ' + key, 'success');
+      addLog('snapshot', 'Manual snapshot: ' + key);
+      renderSnapshotListSettings();
+      renderSnapshotList();
+    } else {
+      showToast('Snapshot failed', 'error');
+    }
+  });
+}
+
+function settingsPull() {
+  manualPull();
+  setTimeout(() => {
+    const src = document.getElementById('fbStatus');
+    const dst = document.getElementById('fbStatusModal');
+    if (src && dst) dst.textContent = src.textContent;
+  }, 1800);
+}
+
+function settingsPush() {
+  pushToFirebase();
+  setTimeout(() => {
+    const srcS = document.getElementById('fbStatus');
+    const dstS = document.getElementById('fbStatusModal');
+    if (srcS && dstS) dstS.textContent = srcS.textContent;
+    const srcL = document.getElementById('lastPushInfo');
+    const dstL = document.getElementById('lastPushInfoModal');
+    if (srcL && dstL) dstL.textContent = srcL.textContent;
+  }, 2200);
+}
 </script>
 
 <!-- ============================================================
